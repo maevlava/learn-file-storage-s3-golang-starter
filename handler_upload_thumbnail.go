@@ -44,7 +44,41 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer file.Close()
-	image, err := io.ReadAll(file)
+
+	rawContentType := fileHeader.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(rawContentType)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type", err)
+		return
+	}
+
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Only JPEG and PNG thumbnails are supported", nil)
+		return
+	}
+
+	exts, err := mime.ExtensionsByType(mediaType)
+	if err != nil || len(exts) == 0 {
+		respondWithError(w, http.StatusBadRequest, "Unsupported Content-Type", err)
+		return
+	}
+	ext := exts[0]
+
+	filename := videoID.String() + ext
+	imageFilePath := filepath.Join(cfg.assetsRoot, filename)
+
+	outFile, err := os.Create(imageFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to create file", err)
+		return
+	}
+	defer outFile.Close()
+
+	_, err = io.Copy(outFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to write file", err)
+		return
+	}
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
