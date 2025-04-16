@@ -1,11 +1,11 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -87,18 +87,11 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	if video.UserID != userID {
 		respondWithError(w, http.StatusUnauthorized, "Unauthorized", nil)
 	}
-	newVideoThumbnailUrl, err := encodeImageToDataURL(image, fileHeader.Filename)
+
+	newVideoThumbnailUrl := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, filename)
 	video.ThumbnailURL = &newVideoThumbnailUrl
 
 	err = cfg.db.UpdateVideo(video)
 	respondWithJSON(w, http.StatusOK, video)
 
-}
-
-func encodeImageToDataURL(imageData []byte, filename string) (string, error) {
-	ext := filepath.Ext(filename)
-	mimeType := mime.TypeByExtension(ext)
-	base64Data := base64.StdEncoding.EncodeToString(imageData)
-	dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
-	return dataURL, nil
 }
