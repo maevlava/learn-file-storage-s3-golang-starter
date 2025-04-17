@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +19,7 @@ type apiConfig struct {
 	platform         string
 	filepathRoot     string
 	assetsRoot       string
+	s3Client         *s3.Client
 	s3Bucket         string
 	s3Region         string
 	s3CfDistribution string
@@ -80,12 +84,16 @@ func main() {
 		log.Fatal("PORT environment variable is not set")
 	}
 
+	s3cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithDefaultRegion(s3Region))
+	s3Client := s3.NewFromConfig(s3cfg)
+
 	cfg := apiConfig{
 		db:               db,
 		jwtSecret:        jwtSecret,
 		platform:         platform,
 		filepathRoot:     filepathRoot,
 		assetsRoot:       assetsRoot,
+		s3Client:         s3Client,
 		s3Bucket:         s3Bucket,
 		s3Region:         s3Region,
 		s3CfDistribution: s3CfDistribution,
