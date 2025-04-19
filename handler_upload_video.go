@@ -1,19 +1,33 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 )
+
+type StreamInfo struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+type FFProbeOutput struct {
+	Streams []StreamInfo `json:"streams"`
+}
 
 // store video to s3 tubely
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
@@ -96,10 +110,32 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	randomHexFileName := hex.EncodeToString(randomBytes)
 	filename := randomHexFileName + ext
 
-	//upload to s3
+	aspectRatio, err := getVideoAspectRatio(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to get video aspect ratio", err)
+		return
+	}
+
+	var prefix string
+	switch aspectRatio {
+	case "16:9":
+		prefix = "landscape"
+	case "9:16":
+		prefix = "portrait"
+	default:
+		prefix = "other"
+	}
+
+	key := fmt.Sprintf("%s/%s", prefix, filename)
+
+	if _, err = tmpFile.Seek(0, io.SeekStart); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to rewind temp file", err)
+		return
+	}
+
 	putObjectInput := &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
-		Key:         aws.String(filename),
+		Key:         aws.String(key),
 		Body:        tmpFile,
 		ContentType: aws.String(mediaType),
 	}
@@ -108,11 +144,58 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Couldn't upload file to s3", err)
 		return
 	}
-	publicUrl := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, filename)
+
+	publicUrl := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
 	video.VideoURL = &publicUrl
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 	}
+
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	if err := cmd.Run(); err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		return "", err
+	}
+
+	if len(result.Streams) == 0 {
+		return "", errors.New("no video streams found")
+	}
+
+	width := result.Streams[0].Width
+	height := result.Streams[0].Height
+
+	if width == 0 || height == 0 {
+		return "other", nil
+	}
+
+	ratio := float64(width) / float64(height)
+
+	const epsilon = 0.05
+
+	if math.Abs(ratio-16.0/9.0) < epsilon {
+		return "16:9", nil
+	} else if math.Abs(ratio-9.0/16.0) < epsilon {
+		return "9:16", nil
+	}
+
+	return "other", nil
 }
