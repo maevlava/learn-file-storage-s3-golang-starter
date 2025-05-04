@@ -89,17 +89,21 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Reset file pointer
-	if _, err = tmpFile.Seek(0, io.SeekStart); err != nil {
-		http.Error(w, "error seeking file", http.StatusInternalServerError)
+	originalTempFilePath := tmpFile.Name()
+
+	aspectRatio, err := getVideoAspectRatio(originalTempFilePath)
+	if err != nil {
+		tmpFile.Close()
+		respondWithError(w, http.StatusInternalServerError, "Failed to get video aspect ratio", err)
 		return
 	}
 
-	exts, err := mime.ExtensionsByType(mediaType)
-	if err != nil || len(exts) == 0 {
-		respondWithError(w, http.StatusBadRequest, "Unsupported Content-Type", err)
+	processedFilePath, err := processVideoForFastStart(originalTempFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to process video for fast start", err)
+		return
 	}
-	ext := exts[0]
+	defer os.Remove(processedFilePath)
 
 	randomBytes := make([]byte, 16)
 	_, err = rand.Read(randomBytes)
@@ -108,13 +112,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	randomHexFileName := hex.EncodeToString(randomBytes)
-	filename := randomHexFileName + ext
-
-	aspectRatio, err := getVideoAspectRatio(tmpFile.Name())
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to get video aspect ratio", err)
-		return
-	}
+	filename := randomHexFileName + ".mp4"
 
 	var prefix string
 	switch aspectRatio {
@@ -128,15 +126,17 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	key := fmt.Sprintf("%s/%s", prefix, filename)
 
-	if _, err = tmpFile.Seek(0, io.SeekStart); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Failed to rewind temp file", err)
+	processedFile, err := os.Open(processedFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to open processed file for upload", err)
 		return
 	}
+	defer processedFile.Close()
 
 	putObjectInput := &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(key),
-		Body:        tmpFile,
+		Body:        processedFile,
 		ContentType: aws.String(mediaType),
 	}
 	_, err = cfg.s3Client.PutObject(context.TODO(), putObjectInput)
@@ -198,4 +198,23 @@ func getVideoAspectRatio(filePath string) (string, error) {
 	}
 
 	return "other", nil
+}
+
+func processVideoForFastStart(inputFilePath string) (string, error) {
+	outputFilePath := inputFilePath + ".faststart"
+	cmd := exec.Command("ffmpeg",
+		"-i", inputFilePath,
+		"-c", "copy",
+		"-bsf:v", "h264_mp4toannexb",
+		"-f", "mp4", "-movflags",
+		"faststart", outputFilePath)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		os.Remove(outputFilePath)
+		return "", fmt.Errorf("failed to process video for faststart: %s", output)
+	}
+	fmt.Printf("Successfully processed video: '%s'\n", outputFilePath)
+
+	return outputFilePath, nil
 }
