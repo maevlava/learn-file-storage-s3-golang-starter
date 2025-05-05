@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -95,7 +96,13 @@ func (cfg *apiConfig) handlerVideoGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, video)
+	videoForClient, err := cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to generate viewable URL for video", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, videoForClient)
 }
 
 func (cfg *apiConfig) handlerVideosRetrieve(w http.ResponseWriter, r *http.Request) {
@@ -116,5 +123,18 @@ func (cfg *apiConfig) handlerVideosRetrieve(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, videos)
+	videosForClient := make([]database.Video, 0, len(videos))
+
+	for _, videoDB := range videos {
+		videoSigned, err := cfg.dbVideoToSignedVideo(videoDB)
+		if err != nil {
+			log.Printf("WARN: Failed to generate presigned URL for video ID %s in list view: %v. Skipping URL for this video.", videoDB.ID, err)
+			videosForClient = append(videosForClient, videoSigned)
+			continue
+		}
+		videosForClient = append(videosForClient, videoSigned)
+	}
+
+	respondWithJSON(w, http.StatusOK, videosForClient)
+
 }

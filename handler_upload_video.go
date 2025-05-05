@@ -11,13 +11,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 	"io"
+	"log"
 	"math"
 	"mime"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
+	"time"
 )
 
 type StreamInfo struct {
@@ -139,20 +143,59 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		Body:        processedFile,
 		ContentType: aws.String(mediaType),
 	}
+
 	_, err = cfg.s3Client.PutObject(context.TODO(), putObjectInput)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't upload file to s3", err)
 		return
 	}
 
-	publicUrl := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
-	video.VideoURL = &publicUrl
+	videoLocation := fmt.Sprintf("%s,%s", cfg.s3Bucket, key)
+	video.VideoURL = &videoLocation
+
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 	}
 
-	respondWithJSON(w, http.StatusOK, video)
+	videoForClient, err := cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to generate viewable URL for video", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, videoForClient)
+}
+func (cfg *apiConfig) dbVideoToSignedVideo(videoIn database.Video) (database.Video, error) {
+	videoOut := videoIn
+
+	if videoOut.VideoURL == nil || *videoOut.VideoURL == "" {
+		log.Printf("WARN: Video ID %s has nil or empty VideoURL, cannot generate presigned URL.", videoIn.ID)
+		videoOut.VideoURL = nil
+		return videoOut, nil
+	}
+
+	// Split the stored "bucket,key" string
+	parts := strings.SplitN(*videoOut.VideoURL, ",", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		log.Printf("ERROR: Invalid format for stored VideoURL for video ID %s: '%s'", videoIn.ID, *videoOut.VideoURL)
+		videoOut.VideoURL = nil
+		return videoOut, fmt.Errorf("invalid stored video location format")
+	}
+	bucket := parts[0]
+	key := parts[1]
+
+	lifetime := 15 * time.Minute
+	signedURL, err := generatePresignedURL(cfg.s3PreSignClient, bucket, key, lifetime)
+	if err != nil {
+		log.Printf("ERROR: Failed to generate presigned URL for video ID %s (key: %s): %v", videoIn.ID, key, err)
+		videoOut.VideoURL = nil
+		return videoOut, fmt.Errorf("failed to sign URL: %w", err)
+	}
+
+	videoOut.VideoURL = &signedURL
+
+	return videoOut, nil
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {
@@ -217,4 +260,27 @@ func processVideoForFastStart(inputFilePath string) (string, error) {
 	fmt.Printf("Successfully processed video: '%s'\n", outputFilePath)
 
 	return outputFilePath, nil
+}
+
+func generatePresignedURL(presignClient *s3.PresignClient, bucket, key string, lifetime time.Duration) (string, error) {
+	if presignClient == nil {
+		return "", errors.New("S3 presign client is not initialized")
+	}
+	log.Printf("Generating presigned URL for bucket='%s', key='%s', lifetime='%s'", bucket, key, lifetime)
+
+	request, err := presignClient.PresignGetObject(context.TODO(), &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}, func(opts *s3.PresignOptions) {
+		opts.Expires = lifetime
+	})
+
+	if err != nil {
+		log.Printf("ERROR: Failed to generate presigned URL for key '%s': %v", key, err)
+		return "", fmt.Errorf("could not generate presigned URL: %w", err)
+	}
+
+	log.Printf("Successfully generated presigned URL for key '%s'", key)
+
+	return request.URL, nil
 }

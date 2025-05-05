@@ -20,6 +20,7 @@ type apiConfig struct {
 	filepathRoot     string
 	assetsRoot       string
 	s3Client         *s3.Client
+	s3PreSignClient  *s3.PresignClient
 	s3Bucket         string
 	s3Region         string
 	s3CfDistribution string
@@ -86,6 +87,7 @@ func main() {
 
 	s3cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithDefaultRegion(s3Region))
 	s3Client := s3.NewFromConfig(s3cfg)
+	s3PreSignClient := s3.NewPresignClient(s3Client)
 
 	cfg := apiConfig{
 		db:               db,
@@ -94,6 +96,7 @@ func main() {
 		filepathRoot:     filepathRoot,
 		assetsRoot:       assetsRoot,
 		s3Client:         s3Client,
+		s3PreSignClient:  s3PreSignClient,
 		s3Bucket:         s3Bucket,
 		s3Region:         s3Region,
 		s3CfDistribution: s3CfDistribution,
