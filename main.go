@@ -14,17 +14,17 @@ import (
 )
 
 type apiConfig struct {
-	db               database.Client
-	jwtSecret        string
-	platform         string
-	filepathRoot     string
-	assetsRoot       string
-	s3Client         *s3.Client
-	s3PreSignClient  *s3.PresignClient
-	s3Bucket         string
-	s3Region         string
-	s3CfDistribution string
-	port             string
+	db                   database.Client
+	jwtSecret            string
+	platform             string
+	filepathRoot         string
+	assetsRoot           string
+	s3Client             *s3.Client
+	s3Bucket             string
+	s3Region             string
+	s3CfDistribution     string
+	CfDistributionDomain string
+	port                 string
 }
 
 type thumbnail struct {
@@ -80,6 +80,8 @@ func main() {
 		log.Fatal("S3_CF_DISTRO environment variable is not set")
 	}
 
+	cfDistributionDomain := os.Getenv("CLOUDFRONT_DOMAIN")
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		log.Fatal("PORT environment variable is not set")
@@ -87,20 +89,19 @@ func main() {
 
 	s3cfg, err := awsconfig.LoadDefaultConfig(context.TODO(), awsconfig.WithDefaultRegion(s3Region))
 	s3Client := s3.NewFromConfig(s3cfg)
-	s3PreSignClient := s3.NewPresignClient(s3Client)
 
 	cfg := apiConfig{
-		db:               db,
-		jwtSecret:        jwtSecret,
-		platform:         platform,
-		filepathRoot:     filepathRoot,
-		assetsRoot:       assetsRoot,
-		s3Client:         s3Client,
-		s3PreSignClient:  s3PreSignClient,
-		s3Bucket:         s3Bucket,
-		s3Region:         s3Region,
-		s3CfDistribution: s3CfDistribution,
-		port:             port,
+		db:                   db,
+		jwtSecret:            jwtSecret,
+		platform:             platform,
+		filepathRoot:         filepathRoot,
+		assetsRoot:           assetsRoot,
+		s3Client:             s3Client,
+		s3Bucket:             s3Bucket,
+		s3Region:             s3Region,
+		s3CfDistribution:     s3CfDistribution,
+		CfDistributionDomain: cfDistributionDomain,
+		port:                 port,
 	}
 
 	err = cfg.ensureAssetsDir()
